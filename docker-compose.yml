@@ -1,0 +1,104 @@
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://picjudge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/picjudge
+  RABBITMQ_URL: amqp://picjudge:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672/
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+  APP_ENV: production
+  FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+  JUDGE_DATA_DIR: /judge-data/submissions
+  JUDGE_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-picjudge}_judge_data
+  JUDGE_DOCKER_IMAGE: ${JUDGE_DOCKER_IMAGE:-pic-judge}
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: picjudge
+      POSTGRES_USER: picjudge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U picjudge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: picjudge
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: ./backend
+    command: ["sh", "-c", "chown 10001:10001 /app/data/problem_data && alembic upgrade head"]
+    volumes:
+      - problem_data:/app/data/problem_data
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    user: "10001:10001"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--limit-concurrency", "100", "--ws-max-size", "4096"]
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - problem_data:/app/data/problem_data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 512m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build: ./backend
+    command: ["python", "worker.py"]
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - problem_data:/app/data/problem_data:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - judge_data:/judge-data
+    mem_limit: 512m
+    pids_limit: 128
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  problem_data:
+  judge_data:
+    name: ${COMPOSE_PROJECT_NAME:-picjudge}_judge_data

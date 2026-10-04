@@ -1,0 +1,20 @@
+gpsim 0.31.0: ADDWF on POSTINCn/POSTDECn/PREINCn with d=W never updates FSR.
+
+ADDWF16::execute() reads its operand with get_value(), which bypasses the
+indirect-register side effects. With d=F the following put() still adjusts
+FSR, but `ADDWF POSTINC0, W` leaves FSR0 unchanged, unlike real PIC18 hardware
+and unlike SUBWF/IORWF/ANDWF/ADDWFC. Use get(), as SUBWF16 does;
+Indirect_Addressing applies at most one FSR update per instruction cycle, so
+the d=F read-modify-write still increments once.
+
+--- a/src/16bit-instructions.cc
++++ b/src/16bit-instructions.cc
+@@ -393,7 +393,7 @@
+     source = cpu_pic->registers[register_address];
+   }
+
+-  new_value = (src_value = source->get_value()) + (w_value = cpu16->Wget());
++  new_value = (src_value = source->get()) + (w_value = cpu16->Wget());
+
+   // Store the result
+

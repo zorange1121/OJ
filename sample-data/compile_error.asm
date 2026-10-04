@@ -1,0 +1,3 @@
+        PROCESSOR 18F4520
+        FROBNICATE 0x99
+        END

@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+.verification/
+backend/.verification*/
+__pycache__/
+*.py[oc]
